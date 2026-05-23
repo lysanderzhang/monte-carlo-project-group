@@ -60,9 +60,7 @@ monte-carlo-project-group/
 │   │   ├── GCQ24.csv
 │   │   └── AIAgent_Gold.csv       ← AI agent position signal (Jan–May 2024)
 │   └── ...
-└── docs/
-    └── specs/
-        └── 2026-05-23-order-execution-design.md
+
 ```
 
 ### Running the notebook
