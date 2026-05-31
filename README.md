@@ -1,4 +1,4 @@
-# Volatility-Volume-based Order Management
+# Volatility-Volume-Based Order Management
 
 **Columbia University — IEOR4703 Monte Carlo Simulation Methods (Hirsa)**  
 **Term Project 2**
@@ -9,53 +9,56 @@ Authors: Hanyu Zhang, Jingyao Lai
 
 ## Overview
 
-This project implements a **volatility-volume-based limit order execution system** for futures markets. The central research question:
+This project implements a state-conditioned limit-order execution system for futures markets.
 
-> *Given a trade decision to buy or sell, at what price level should we place a limit order — conditioned on the current market regime — to maximize expected execution quality?*
+The research question is:
 
-The system builds empirical conditional probability distributions (ePDFs) of intra-period price range (rangeUp / rangeDn) conditioned on a three-dimensional regime state (volume × volatility × direction). A **Monte Carlo simulation layer** propagates uncertainty through execution outcomes, producing fill-probability confidence bands and an execution frontier used to select the optimal limit level per state.
+> Given an existing buy/sell decision, where should a limit order be placed so that execution quality is improved without creating excessive missed-fill risk?
 
-**The AI-agent signal is a testing vehicle only.** The project is about *how* to execute a decision efficiently, not about predicting price direction.
+The model does **not** try to predict whether the market will go up or down. Directional signals are treated as an input. The project focuses on the execution layer: conditional on a trade decision, it estimates how far price is likely to move within the next holding window and chooses a limit level accordingly.
+
+For each asset, the pipeline:
+
+1. builds non-overlapping OHLC bars from one-minute futures data;
+2. computes upward and downward intra-bar ranges in tick units;
+3. assigns each bar to a regime state based on volume, volatility, and recent direction;
+4. estimates empirical conditional distributions of favorable price movement;
+5. uses Monte Carlo simulation to build fill-probability frontiers; and
+6. backtests the selected limit levels out of sample.
+
+The AI-agent signal, when available, is used only as a source of trade decisions. It is not the main object of the project.
 
 ---
 
-## Assets Supported
+## Main Findings
 
-The pipeline auto-discovers all assets in `data/` — no code changes required to add a new asset.
+For the Nasdaq primary asset at `tau = 5` minutes and fill threshold `theta = 0.60`, the baseline `expected_ticks` objective produces many limit orders and a solid gross fill improvement, but missed fills are costly:
 
-| Asset | Folder | Contracts | Period | Tick Size |
-|---|---|---|---|---|
-| Nasdaq (primary) | `Nasdaq/` | NQH20, NQM20, NQU20 | Jan–May 2020 | 0.25 |
-| Gold | `Gold/` | GCG24, GCJ24, GCM24, GCQ24 | 2023–2024 | 0.10 |
-| EuroStoxx | `EuroStoxx/` | VGH22, … | varies | 0.50 |
-| German Bunds | `Bunds/` | GBL… | varies | 0.01 |
-| GBP/USD | `GBPUSD/` | 6BH…, … | varies | 0.01 |
-| Japanese Yen | `JPY/` | 6JH…, … | varies | 0.005 |
-| Heating Oil | `HeatingOil/` | HOF…, … | varies | 0.01 |
+| Objective | Limit orders | Market fallbacks | Fill rate | Gross edge | Net vs market |
+|---|---:|---:|---:|---:|---:|
+| `expected_ticks` | 864 | 54 | 64.9% | +2.04 ticks | -10.14 ticks |
+| `cond_on_fill` | 864 | 54 | 64.9% | +2.04 ticks | -10.14 ticks |
+| `net_of_miss` | 47 | 871 | 53.2% | +3.72 ticks | -4.21 ticks |
 
-Tick sizes are pinned in `Config.tick_override`. For a new asset, add its folder under `data/`, add the pinned tick, and re-run — no other changes needed.
+The key lesson is that maximizing `ell * P(fill)` can overstate execution quality because it treats missed fills as costless. The `net_of_miss` objective is more conservative: it chooses a limit order only when the estimated realized net improvement is positive after charging missed fills at the open-to-close move.
 
 ---
 
 ## Repository Layout
 
-```
+```text
 monte-carlo-project-group/
-├── order_execution_v8.ipynb   ← clean submission notebook (imports packages)
-├── order_execution.py           ← full pipeline engine (Config, AssetRegistry,
-│                                   run_pipeline, cross_asset_table, OrderExecution)
-├── order_execution_plots.py     ← plotting helpers (frontiers, Figure-2, P&L,
-│                                   calibration, sensitivity heatmaps)
+├── order_execution_v8.ipynb       # clean submission notebook
+├── order_execution.py             # execution engine and backtest pipeline
+├── order_execution_plots.py       # plotting helpers
 ├── README.md
 └── data/
     ├── Nasdaq/
     │   ├── NQH20.csv
     │   ├── NQM20.csv
     │   ├── NQU20.csv
-    │   └── AIAgent_Nasdaq.csv   ← AI-agent signal (optional; triggers overlap fix)
+    │   └── AIAgent_Nasdaq.csv     # optional external trade signal
     ├── Gold/
-    │   ├── GCG24.csv
-    │   └── ...
     ├── EuroStoxx/
     ├── Bunds/
     ├── GBPUSD/
@@ -63,200 +66,266 @@ monte-carlo-project-group/
     └── HeatingOil/
 ```
 
-Each asset folder may optionally contain an `AIAgent*.csv` file. If present, the pipeline clips the sample to the AI/OHLC overlap window before computing the train/test split (FIX 7 — see below).
+Each asset folder should contain one or more futures contract CSV files. If an `AIAgent*.csv` file is present, the pipeline joins it to the OHLC bars and restricts the sample to the common AI/OHLC time window before the train/test split.
+
+---
+
+## Supported Assets
+
+The asset registry automatically discovers subfolders under `data_dir`.
+
+| Asset | Example contracts | Tick size |
+|---|---|---:|
+| Nasdaq | NQH20, NQM20, NQU20 | 0.25 |
+| Gold | GCG24, GCJ24, GCM24, GCQ24 | 0.10 |
+| EuroStoxx | VGH22, ... | 0.50 |
+| German Bunds | GBL... | 0.01 |
+| GBP/USD | 6BH..., ... | 0.01 |
+| Japanese Yen | 6JH..., ... | 0.005 |
+| Heating Oil | HOF..., ... | 0.01 |
+
+Tick sizes are pinned in `Config.tick_override`. To add a new asset, create a new subfolder under `data_dir`, add its contract CSV files, add a tick-size override if needed, and rerun the notebook.
 
 ---
 
 ## Setup
 
-### Requirements
+Install the required Python packages:
 
 ```bash
 pip install numpy pandas matplotlib seaborn jupyter
 ```
 
-Python 3.8+. No additional dependencies.
+Python 3.8 or higher is recommended.
 
-### Running the notebook
+Run the notebook:
 
 ```bash
-cd monte-carlo-project-group
 jupyter notebook order_execution_v8.ipynb
 ```
 
-Run all cells top to bottom. The notebook is self-contained: it imports `order_execution` and `order_execution_plots`, then produces all results, tables, and figures in a clean format.
-
-Note: To change to other assets, change the PRIMARY_ASSET in config section 0 to be the asset names, then re-run the whole pipeline. 
+Then run all cells from top to bottom. The notebook imports the reusable pipeline from `order_execution.py` and the plotting functions from `order_execution_plots.py`.
 
 ---
 
 ## Configuration
 
-All parameters are controlled by the `Config` dataclass defined in `order_execution.py`. The notebook instantiates it in the first cell:
+The main parameters are stored in the `Config` dataclass in `order_execution.py`. The notebook sets the primary asset and creates a configuration object:
 
 ```python
 import order_execution as oe
-import order_execution_plots as oep
+import order_execution_plots as oe_plots
+
+PRIMARY_ASSET = "Nasdaq"
 
 cfg = oe.Config(
-    data_dir        = 'data/',
-    tau             = 5,              # holding period in minutes
-    half_life       = 20,             # EWMA half-life in τ-bars
-    n_states        = 3,              # volatility regime states
-    m_states        = 3,              # volume regime states
-    fill_prob_threshold = 0.60,       # minimum fill probability for a limit order
-    n_mc_paths      = 10_000,         # MC paths per state/direction cell
-    mc_objective    = 'expected_ticks',
-    use_ai_agent_signal   = True,
-    restrict_to_ai_overlap = True,    # core fix — see FIX 7 below
+    data_dir="../data/",              # change to "data/" if data is inside repo root
+    tau=5,                            # holding period in minutes
+    half_life=20,                     # EWMA half-life in tau-bars
+    m_states=3,                       # volume states
+    n_states=3,                       # volatility states
+    k_states=3,                       # direction states
+    burn_in=500,
+    test_start_frac=0.60,
+    fill_prob_threshold=0.60,
+    queue_haircut=0.92,
+    n_mc_paths=10_000,
+    mc_objective="expected_ticks",    # baseline used in Sections 1-2
+    use_ai_agent_signal=True,
+    restrict_to_ai_overlap=True,
 )
-PRIMARY_ASSET = 'Nasdaq'
+
+registry = cfg.discover()
 ```
 
-**Key Config parameters:**
-
-| Parameter | Default | Description |
-|---|---|---|
-| `data_dir` | `'data/'` | Root folder for all asset sub-folders |
-| `tau` | `5` | Holding period (bar width) in minutes |
-| `half_life` | `20` | EWMA half-life in τ-bars |
-| `m_states` | `3` | Volume quantile bins |
-| `n_states` | `3` | Volatility quantile bins |
-| `burn_in` | `500` | Bars discarded before ePDF starts accumulating |
-| `test_start_frac` | `0.60` | In-sample fraction; OOS starts at bar `int(n × 0.60)` |
-| `fill_prob_threshold` | `0.60` | θ: minimum P(fill) to place a limit (else market order) |
-| `queue_haircut` | `0.92` | Conservative discount for queue-position uncertainty |
-| `mc_objective` | `'expected_ticks'` | Objective for choosing limit level per state |
-| `use_ai_agent_signal` | `True` | Use `AIAgent*.csv` if present in asset folder |
-| `restrict_to_ai_overlap` | `True` | Clip OHLC to AI/OHLC date overlap before split (FIX 7) |
-
-**MC objectives:**
-
-| Objective | Formula | Behaviour |
-|---|---|---|
-| `expected_ticks` | `argmax_l  l × haircut × P(fill\|l)` | Maximises expected ticks; misses are costless |
-| `cond_on_fill` | `argmax_l  l  s.t. P(fill) ≥ θ` | Widest feasible level given threshold |
-| `net_of_miss` | `argmax_l  E[realised ticks]` | Charges missed-fill close-price cost; very conservative in high-vol regimes |
-
----
-
-## Pipeline (corrected order)
-
-```
-load_data
-  └─ build_ohlc            (wall-clock resample, MIN_COMPLETENESS filter)
-       └─ compute_ranges   (R, R_up, R_dn in integer tick units)
-            └─ compute_ewma_states  (Algorithm 1: lag-1, vol proxy = EWM std)
-                 └─ generate_signals
-                      └─ restrict_to_ai_overlap   ← FIX 7: must precede build_epdf
-                           └─ build_epdf          (trains only on in-sample bars)
-                                └─ build_mc_frontier_cache
-                                     └─ run_backtest
-                                          └─ compute_summary_metrics
-```
-
-The pipeline is exposed in two ways:
+To change the primary asset, modify:
 
 ```python
-# Single asset — returns full result dict including trades, ePDF store, MC cache
-res = oe.run_pipeline('Nasdaq', cfg)
-
-# All discovered assets — returns list of result dicts + formatted DataFrame
-results, table = oe.cross_asset_table(cfg.discover(), cfg)
+PRIMARY_ASSET = "Gold"
 ```
 
----
-
-## Key Modeling Decisions
-
-### Non-overlapping OHLC windows 
-OHLC bars are built with `resample()` on wall-clock time (not a rolling window), with a `MIN_COMPLETENESS` filter that drops bars covering fewer than 60% of the expected 1-min ticks. Overlapping windows produce ~τ× more samples but introduce serial correlation (adjacent bars share τ−1 minutes), violating the i.i.d. assumption required for Monte Carlo sampling.
-
-### EWMA state engine — strict out-of-sample 
-Algorithm 1 from the project spec is implemented with a one-bar lag: at bar `j`, only information from bars `0..j−1` is used. The volatility proxy is the **EWM standard deviation of range** (`ewmv`), not the EWM mean — consistent with the project spec definition of volatility. Regime bin thresholds are also computed from the EWMA series up to bar `j` only.
-
-### Signal-based open-to-open direction
-`delta_x = open.diff()` — the open-to-open move, not close-to-open. This correctly reflects information available at bar placement time.
-
-### ePDF trained only on in-sample bars 
-The empirical conditional histogram accumulates counts only for bars in `[burn_in, test_start_idx)`. OOS bars are used only for backtest evaluation, not ePDF estimation, preventing data leakage.
-
-### AI/OHLC overlap clipping before train/test split 
-When an `AIAgent*.csv` is present, `restrict_to_ai_overlap()` clips the OHLC DataFrame to `[max(ohlc_start, ai_start), min(ohlc_end, ai_end)]` **before** `build_epdf()` computes `test_start_idx = int(n × 0.60)`. Without this, the bar-count split is anchored to the raw OHLC length — for Nasdaq, NQU20 data runs through September 2020 while the AI signal ends May 2020. A naïve split placed the OOS boundary at May 29, leaving only 19 signal events in the test set. With the fix applied, the OOS window starts April 2020 and captures all 918 signal events.
-
-### Sparse-state mitigation
-With 27 state combinations (3×3×3), some cells accumulate few observations. Two mitigations: (1) Laplace/Jeffreys smoothing (α=0.5) prevents zero-probability tails; (2) a three-tier fallback degrades gracefully from per-state ePDF → marginal ePDF → market order.
-
-### Execution metrics 
-Two metrics are reported separately to avoid conflating fill-quality with missed-fill costs:
-- **`gross_edge`** = `fill_rate × mean_improvement | filled` — execution quality conditional on filling
-- **`net_vs_market`** = `realized_avg_all` — average ticks vs open including missed-fill close costs
+and rerun the notebook.
 
 ---
 
-## Results Summary (τ = 5 min, `expected_ticks` objective)
+## Pipeline
 
-Cross-asset results from `cross_asset_table()`:
+The pipeline is designed to avoid look-ahead bias:
 
-| Asset | Tick | Limit trades | Fill rate | Impr\|filled | gross_edge | net_vs_market |
-|---|---|---|---|---|---|---|
-| Bunds | 0.010 | 8 | 50.00% | 1.00 | 0.50 | −0.38 |
-| EuroStoxx | 0.500 | 48 | 52.08% | 1.00 | 0.52 | −3.65 |
-| GBPUSD | 0.010 | 62 | 70.97% | 1.00 | 0.71 | −0.56 |
-| Gold | 0.100 | 559 | 67.44% | 1.01 | 0.68 | −4.38 |
-| HeatingOil | 0.010 | 117 | 55.56% | 14.83 | 8.24 | −14.19 |
-| JPY | 0.005 | 163 | 65.64% | 1.00 | 0.66 | −1.34 |
-| **Nasdaq** | 0.250 | **864** | **64.93%** | **3.14** | **2.04** | −10.14 |
+```text
+load_data
+  -> build_ohlc
+  -> compute_ranges
+  -> compute_ewma_states
+  -> generate_signals
+  -> restrict_to_ai_overlap
+  -> build_epdf
+  -> build_mc_frontier_cache
+  -> run_backtest
+  -> compute_summary_metrics
+```
 
-Nasdaq primary-asset detail (τ=5 min, OOS Apr–May 2020):
+Usage:
 
-- **918 OOS signal events** — all within the AI signal window (Jan–May 2020)
-- **864 limit orders placed** (54 market fallbacks)
-- **64.93% limit fill rate**; mean improvement conditional on fill: 3.14 ticks
-- **gross_edge = +2.04 ticks** (fills only)
-- High-volatility regimes (COVID period) produce wider range distributions: limits placed at larger offsets while maintaining the 60% fill threshold
-- ePDF fill-probability predictions are well-calibrated against realized fill rates
+```python
+# Single asset
+res = oe.run_pipeline(PRIMARY_ASSET, cfg, registry)
+
+# Cross-asset comparison
+table = oe.cross_asset_table(list(registry), cfg, registry, objective="expected_ticks")
+print(table)
+```
+
+`run_pipeline()` returns a dictionary containing the OHLC data, empirical distribution store, Monte Carlo cache, trades, summary metrics, optimal levels, and regime-level diagnostics.
+
+---
+
+## Methodology
+
+### 1. Non-overlapping OHLC bars
+
+The raw one-minute data is resampled into non-overlapping `tau`-minute bars. Bars with insufficient one-minute observations are dropped using the `min_completeness` threshold.
+
+This avoids artificially increasing the sample size with overlapping windows, which would make adjacent observations highly correlated.
+
+### 2. Tick-based range variables
+
+For each bar, the model computes:
+
+| Variable | Definition | Execution interpretation |
+|---|---|---|
+| `R` | `(high - low) / tick_size` | total intra-bar range |
+| `R_up` | `(high - open) / tick_size` | favorable move for sell limits |
+| `R_dn` | `(open - low) / tick_size` | favorable move for buy limits |
+
+All ranges are rounded to integer tick units.
+
+### 3. State-conditioned empirical distributions
+
+Each bar is assigned to a regime state:
+
+```text
+state = (volume_state, volatility_state, direction_state)
+```
+
+The state variables are computed using lagged information only. At bar `j`, the EWMA statistics and regime thresholds use data from bars `0` through `j-1`, not the current or future bar.
+
+The empirical probability distributions are trained only on the in-sample window:
+
+```text
+[burn_in, int(n * test_start_frac))
+```
+
+Out-of-sample bars are used only for backtesting.
+
+### 4. Monte Carlo execution frontier
+
+For each state and trade direction, the model simulates favorable price movement from the empirical conditional distribution and estimates:
+
+```text
+P(fill | limit level ell)
+```
+
+A queue haircut is applied to make fill probabilities more conservative:
+
+```text
+adjusted_fill_probability = queue_haircut * P(fill | ell)
+```
+
+The output is an execution frontier: fill probability as a function of limit level.
+
+---
+
+## Placement Objectives
+
+The project compares three ways to choose the optimal limit level `ell*`.
+
+| Objective | Rule | Interpretation |
+|---|---|---|
+| `expected_ticks` | maximize `ell * queue_haircut * P(fill | ell)` subject to fill probability clearing the threshold | Aggressive; missed fills are treated as costless |
+| `cond_on_fill` | choose the widest feasible `ell` subject to the fill threshold | Also aggressive; focuses only on conditional fill quality |
+| `net_of_miss` | maximize expected realized ticks after charging missed fills | Conservative; routes to market when no positive-net limit level is found |
+
+The `expected_ticks` objective is useful as a baseline because it produces clear execution frontiers and many limit orders. The `net_of_miss` objective is more realistic because it penalizes missed-fill outcomes.
+
+---
+
+## Metrics
+
+Two headline metrics are reported separately:
+
+| Metric | Formula | Meaning |
+|---|---|---|
+| `fill_rate` | filled limit orders / placed limit orders | how often the limit order executes |
+| `mean_improvement | filled` | average ticks saved on filled limits | conditional execution quality |
+| `gross_edge` | `fill_rate * mean_improvement | filled` | fill-quality metric ignoring missed-fill costs |
+| `net_vs_market` | average realized ticks over all limit orders | realized improvement vs crossing at the open, including misses |
+
+The most economically honest metric is `net_vs_market`, because it includes the cost of missed limit orders.
+
+---
+
+## Results
+
+### Cross-asset baseline results
+
+The table below uses `tau = 5`, `theta = 0.60`, and the `expected_ticks` objective.
+
+| Asset | Tick | Limit trades | Fill rate | Impr\|filled | Gross edge | Net vs market |
+|---|---:|---:|---:|---:|---:|---:|
+| Bunds | 0.010 | 8 | 50.00% | 1.00 | 0.50 | -0.38 |
+| EuroStoxx | 0.500 | 48 | 52.08% | 1.00 | 0.52 | -3.65 |
+| GBPUSD | 0.010 | 62 | 70.97% | 1.00 | 0.71 | -0.56 |
+| Gold | 0.100 | 559 | 67.44% | 1.01 | 0.68 | -4.38 |
+| HeatingOil | 0.010 | 117 | 55.56% | 14.83 | 8.24 | -14.19 |
+| JPY | 0.005 | 163 | 65.64% | 1.00 | 0.66 | -1.34 |
+| Nasdaq | 0.250 | 864 | 64.93% | 3.14 | 2.04 | -10.14 |
+
+### Nasdaq primary-asset result
+
+For Nasdaq, the AI/OHLC overlap correction keeps all 918 out-of-sample signal events in the January-May 2020 AI signal window. Under the baseline objective:
+
+- 918 total out-of-sample signal events
+- 864 limit orders placed
+- 54 market fallbacks
+- 64.93% limit fill rate
+- +3.14 ticks average improvement conditional on fill
+- +2.04 ticks gross edge
+- -10.14 ticks net vs market after missed-fill costs
+
+The result highlights the central execution tradeoff: wider limits improve filled trades, but unfilled orders can lose more than the filled-order gains.
 
 ---
 
 ## Model Limitations
 
-| Limitation | Notes | v4 status |
+| Limitation | Impact | Current treatment |
 |---|---|---|
-| No queue position | Fill probability overestimated at the touch (many orders ahead) | Queue haircut (92%) applied as a partial correction |
-| No partial fills | Orders are 100% filled or unfilled | Unchanged |
-| No latency modeling | Assumes instantaneous placement at bar open | Unchanged |
-| OHLC-only path | Intra-bar price path unknown; a limit touched briefly may not fill | Unchanged |
-| No adverse selection | Fill assumed at limit price regardless of why price moved there | Unchanged |
-| i.i.d. bar assumption | MC sampling treats bars as independent; EWMA state-conditioning partially addresses volatility clustering | Regime conditioning is the primary mitigation |
-| Thin assets | Bunds (8 trades), EuroStoxx (48) — too few OOS events for reliable inference | Flagged in cross-asset table; primary results use Nasdaq |
-
+| Queue position not modeled directly | Fill probability can be overstated at touched prices | Queue haircut applied |
+| No partial fills | Every order is treated as fully filled or fully missed | Simplifying assumption |
+| No latency model | Assumes immediate placement at bar open | Simplifying assumption |
+| OHLC-only path | Cannot observe the exact intrabar path or queue dynamics | Uses high/low touch condition |
+| No explicit adverse selection model | Filled limits may be selected in unfavorable states | Partially reflected through realized net metrics |
+| Independent MC sampling | Monte Carlo draws treat bars as conditionally independent | Regime conditioning partially mitigates volatility clustering |
+| Thin assets | Some assets have too few out-of-sample events for strong inference | Primary analysis focuses on Nasdaq |
 
 ---
 
-## Notebook Structure (`order_execution_v8.ipynb`)
+## Notebook Sections
 
-| Cell | Content |
+| Section | Content |
 |---|---|
-| **1** | Imports: `order_execution as oe`, `order_execution_plots as oep` |
-| **2** | Config instantiation (`Config(...)`) and `PRIMARY_ASSET` selection |
-| **3** | Asset registry display — lists all auto-discovered assets and contracts |
-| **4** | Single-asset `run_pipeline` call; prints execution summary |
-| **5** | Execution frontiers plot (fill probability vs limit level, by vol state) |
-| **6** | Optimal levels table (per-regime l*, market-order flags) |
-| **7** | Figure-2 replication (ePDF counts, PMF, fill counts, survival function) |
-| **8** | Cumulative improvement plot (gross vs net, rolling fill rate) |
-| **9** | Fill probability calibration (predicted survival vs realized fill rate) |
-| **10** | MC objective comparison (`expected_ticks` vs `cond_on_fill` vs `net_of_miss`) |
-| **11** | Regime-level breakdown table (fill rate and net ticks per vol × sig state) |
-| **12** | Sensitivity heatmaps (τ × fill threshold grid for fill rate, gross edge, net) |
-| **13** | Sensitivity plot via `oep.plot_sensitivity()` |
-| **14** | Cross-asset table via `oe.cross_asset_table()` |
+| 0 | Configuration and asset discovery |
+| 1 | Primary-asset pipeline run and execution summary |
+| 2 | Execution frontiers, Figure-2 replication, and cumulative improvement plots |
+| 3 | Objective comparison: `expected_ticks`, `cond_on_fill`, and `net_of_miss` |
+| 4 | Sensitivity analysis over `tau` and fill threshold |
+| 5 | Cross-asset comparison table |
 
 ---
 
 ## References
 
 - Hirsa, A. — IEOR4703 Term Project 2 specification: *Volatility-Volume-based Order Management*
-- Almgren, R. & Chriss, N. (2001) — Optimal execution of portfolio transactions
-- Harris, L. (2003) — *Trading and Exchanges: Market Microstructure for Practitioners*
+- Almgren, R. and Chriss, N. (2001). *Optimal Execution of Portfolio Transactions*
+- Harris, L. (2003). *Trading and Exchanges: Market Microstructure for Practitioners*
