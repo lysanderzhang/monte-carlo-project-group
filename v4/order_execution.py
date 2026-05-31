@@ -797,9 +797,9 @@ class OrderExecution:
 
     # --- plots (imported lazily so the core module has no matplotlib dependency) ---
     def plot_all(self):
-        from oe_plots import plot_execution_frontiers, plot_figure2, \
+        from v4.order_execution_plots import plot_execution_frontiers, plot_figure2, \
             plot_cumulative_improvement, plot_calibration
         plot_execution_frontiers(self.res, self.cfg)
         plot_figure2(self.res, self.cfg)
         plot_cumulative_improvement(self.res, self.cfg)
-        plot_calibration(self.res, self.cfg)
+        # plot_calibration(self.res, self.cfg)
