@@ -229,3 +229,114 @@ The headline metric is **net vs market order benchmark** = `fill_rate × mean_im
 - Almgren, R. & Chriss, N. (2001) — Optimal execution of portfolio transactions
 - Harris, L. (2003) — *Trading and Exchanges: Market Microstructure for Practitioners*
 
+## Ammendment - TESTING.md — gradual validation of `order_execution_v2.ipynb`
+
+The notebook **auto-discovers** assets: it scans `DATA_DIR` for subfolders, treats
+`AIAgent*.csv` as the signal file and the rest as contracts, and infers tick size
+from the price grid. So you point it at one asset at a time by setting `ASSET`
+(Section 0) to a **folder name**, then *Run All*. No paths to hand-edit.
+
+```
+data/
+├── EuroStoxx/                       VGH22.csv VGM22.csv  AIAgent_EuroStoxx.csv
+├── Nasdaq/                          NQH20.csv NQM20.csv NQU20.csv  AIAgent_Nasdaq.csv
+├── Gold/                            GCG24.csv … GCQ24.csv  AIAgent_Gold.csv
+├── GBP – British Pound/             BPM20.csv BPU20.csv  AIAgent_GBPUSD.csv
+├── German Bunds – …/                RXM25.csv RXU25.csv RXZ25.csv  AIAgent_Bunds.csv
+├── JPY – Japanese Yen/              JYU24.csv JYZ24.csv  AIAgent_JPY.csv
+└── HeatingOil/                      …
+```
+
+Run the discovery cell (Section 2) once; it prints every asset it found with the
+contracts and AIAgent file it paired. If an asset is missing, check that its
+folder sits directly under `DATA_DIR` and contains an `AIAgent*.csv`.
+
+---
+
+### The gradual order
+
+Do **one asset at a time**. After each, glance at the four checks in the
+"spot-check" table below before moving on. Only `ASSET` (and occasionally
+`BURN_IN`) changes between runs.
+
+#### Step 1 — EuroStoxx (start here; smallest contract set, already validated)
+```python
+ASSET           = 'EuroStoxx'
+BURN_IN         = 300
+TEST_START_FRAC = 0.60
+```
+Tick auto-infers to 0.5. Expect the loader to stitch `VGH22`+`VGM22` and keep the
+liquid front-month window (~Mar–Jun 2022). This asset is thin on tradable signals
+in the test window — you'll see many **market fallbacks** and only a handful of
+limit orders. That's real; it's a good first read on how the fallback path behaves.
+
+#### Step 2 — Nasdaq (the project's primary asset)
+```python
+ASSET           = 'Nasdaq'
+BURN_IN         = 500          # 3 contracts, long window → more burn-in is fine
+TEST_START_FRAC = 0.60
+```
+`TICK_OVERRIDE` already pins Nasdaq to 0.25, so it won't rely on inference.
+Compare your headline numbers against the README (fill rate ≈ 66%,
+`net_vs_market` ≈ +2.2 ticks). **Expect v2 to be a little less optimistic than v1**
+— that difference is the in-sample-leak correction (FIX 2), not a regression.
+
+### Step 3 — Gold (cross-asset, different tick)
+```python
+ASSET           = 'Gold'
+BURN_IN         = 500
+```
+`TICK_OVERRIDE` pins Gold to 0.10. Four contracts; confirm the rollover stitching
+in the load log looks sane (each contract handing off to the next).
+
+#### Step 4 — the rest (Bunds, JPY, GBP, HeatingOil)
+```python
+ASSET = 'German Bunds – German Government Bonds'   # use the EXACT discovered name
+```
+These have **no `TICK_OVERRIDE`**, so tick is inferred from the price grid. **Check
+the printed "Tick size (inferred …)" line** — rates/FX futures have tiny ticks and
+inference can be fooled by a stray price. If it looks wrong, pin it in
+`TICK_OVERRIDE` (Section 0) and re-run. Copy the folder name verbatim from the
+discovery printout (the en-dashes are not regular hyphens).
+
+---
+
+### Optional: offline synthetic data (no real CSVs needed)
+
+If you want to dry-run on a machine without the real files:
+```bash
+python make_test_data.py .
+```
+This writes three discovery-compatible folders — `SynthTiny` (fast smoke test),
+`SynthSmall` (rollover + 3% missing minutes → stresses FIX 4), `SynthCovid`
+(volatility-regime spike). Set `ASSET='SynthTiny'` with `BURN_IN=100`,
+`TEST_START_FRAC=0.5` for a ~30 s end-to-end check. These are **synthetic** — use
+them to confirm the code runs, not for results.
+
+---
+
+### Per-run spot-checks
+
+| Fix | Where | "Correct" looks like |
+|-----|-------|----------------------|
+| FIX 2 | Section 6 print | `in-sample valid bars == store total` (the MATCH line) |
+| FIX 4 | Section 3 print | `off the τ-min grid: 0`, even with rollover/gaps |
+| FIX 5 | Section 10a | `net_vs_market` and `realized_avg_all` are two distinct lines |
+| Tick  | Section 2 print | inferred/override value matches the contract's real tick |
+| FIX 1 | Section 5 | flip `VOL_PROXY` → volatility-state mix shifts |
+| FIX 3 | Section 7 | flip `MC_OBJECTIVE` → `ℓ*` table may change (often identical; see §7 note) |
+
+If `[FIX 2 check]` prints `in-sample valid bars = 0`, `BURN_IN` is ≥ the in-sample
+window — lower it (thin assets) or lower `MIN_BARS_PER_DAY` if too many days were
+filtered out.
+
+---
+
+### Performance
+
+The slowest cell is **Section 10d (sensitivity)** — it re-runs the whole pipeline
+per `(τ, threshold)` pair. Grids are trimmed by default (`TAU_GRID=[5,10,15]`,
+`THRESH_GRID=[0.5,0.6,0.7]`); widen for the final report. Sensitivity and
+cross-asset runs skip the bootstrap (`bootstrap_reps=0`) since they only need
+`ℓ*`. While iterating on a slow asset, you can also drop `BOOTSTRAP_REPS` to ~200
+(Section 0) — it only narrows the Section 7 CI band.
