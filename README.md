@@ -41,7 +41,7 @@ Tick sizes are pinned in `Config.tick_override`. For a new asset, add its folder
 
 ```
 monte-carlo-project-group/
-├── order_execution_v4_2.ipynb   ← clean submission notebook (imports packages)
+├── order_execution_v8.ipynb   ← clean submission notebook (imports packages)
 ├── order_execution.py           ← full pipeline engine (Config, AssetRegistry,
 │                                   run_pipeline, cross_asset_table, OrderExecution)
 ├── order_execution_plots.py     ← plotting helpers (frontiers, Figure-2, P&L,
@@ -81,10 +81,12 @@ Python 3.8+. No additional dependencies.
 
 ```bash
 cd monte-carlo-project-group
-jupyter notebook order_execution_v4_2.ipynb
+jupyter notebook order_execution_v8.ipynb
 ```
 
 Run all cells top to bottom. The notebook is self-contained: it imports `order_execution` and `order_execution_plots`, then produces all results, tables, and figures in a clean format.
+
+Note: To change to other assets, change the PRIMARY_ASSET in config section 0 to be the asset names, then re-run the whole pipeline. 
 
 ---
 
@@ -167,42 +169,28 @@ results, table = oe.cross_asset_table(cfg.discover(), cfg)
 
 ## Key Modeling Decisions
 
-### Non-overlapping OHLC windows (FIX 4)
+### Non-overlapping OHLC windows 
 OHLC bars are built with `resample()` on wall-clock time (not a rolling window), with a `MIN_COMPLETENESS` filter that drops bars covering fewer than 60% of the expected 1-min ticks. Overlapping windows produce ~τ× more samples but introduce serial correlation (adjacent bars share τ−1 minutes), violating the i.i.d. assumption required for Monte Carlo sampling.
 
-### EWMA state engine — strict out-of-sample (FIX 1)
+### EWMA state engine — strict out-of-sample 
 Algorithm 1 from the project spec is implemented with a one-bar lag: at bar `j`, only information from bars `0..j−1` is used. The volatility proxy is the **EWM standard deviation of range** (`ewmv`), not the EWM mean — consistent with the project spec definition of volatility. Regime bin thresholds are also computed from the EWMA series up to bar `j` only.
 
-### Signal-based open-to-open direction (FIX 6)
+### Signal-based open-to-open direction
 `delta_x = open.diff()` — the open-to-open move, not close-to-open. This correctly reflects information available at bar placement time.
 
-### ePDF trained only on in-sample bars (FIX 2)
+### ePDF trained only on in-sample bars 
 The empirical conditional histogram accumulates counts only for bars in `[burn_in, test_start_idx)`. OOS bars are used only for backtest evaluation, not ePDF estimation, preventing data leakage.
 
-### AI/OHLC overlap clipping before train/test split (FIX 7 — core fix)
+### AI/OHLC overlap clipping before train/test split 
 When an `AIAgent*.csv` is present, `restrict_to_ai_overlap()` clips the OHLC DataFrame to `[max(ohlc_start, ai_start), min(ohlc_end, ai_end)]` **before** `build_epdf()` computes `test_start_idx = int(n × 0.60)`. Without this, the bar-count split is anchored to the raw OHLC length — for Nasdaq, NQU20 data runs through September 2020 while the AI signal ends May 2020. A naïve split placed the OOS boundary at May 29, leaving only 19 signal events in the test set. With the fix applied, the OOS window starts April 2020 and captures all 918 signal events.
 
 ### Sparse-state mitigation
 With 27 state combinations (3×3×3), some cells accumulate few observations. Two mitigations: (1) Laplace/Jeffreys smoothing (α=0.5) prevents zero-probability tails; (2) a three-tier fallback degrades gracefully from per-state ePDF → marginal ePDF → market order.
 
-### Execution metrics (FIX 5)
+### Execution metrics 
 Two metrics are reported separately to avoid conflating fill-quality with missed-fill costs:
 - **`gross_edge`** = `fill_rate × mean_improvement | filled` — execution quality conditional on filling
 - **`net_vs_market`** = `realized_avg_all` — average ticks vs open including missed-fill close costs
-
----
-
-## Corrections from v1 → v4
-
-| Fix | Description | Impact |
-|---|---|---|
-| **FIX 1** | Volatility proxy = EWM **std** of range (`ewmv`), not EWM mean | Correct regime state assignment |
-| **FIX 2** | ePDF trains only on bars `[burn_in, test_start_idx)` | Eliminates OOS data leakage |
-| **FIX 3** | Laplace smoothing (α=0.5) + three-tier fallback | Handles sparse states without zero-prob tails |
-| **FIX 4** | OHLC built with wall-clock `resample()` + `MIN_COMPLETENESS` filter | Correct non-overlapping bars |
-| **FIX 5** | Two separate metrics: `gross_edge` and `net_vs_market` | Cleaner separation of fill quality vs miss cost |
-| **FIX 6** | `delta_x = open.diff()` (open-to-open), not close-to-open | Correct directional signal at placement time |
-| **FIX 7** | `restrict_to_ai_overlap()` called before `build_epdf()` | OOS window covers full AI signal window (918 vs 19 events for Nasdaq) |
 
 ---
 
@@ -243,18 +231,10 @@ Nasdaq primary-asset detail (τ=5 min, OOS Apr–May 2020):
 | i.i.d. bar assumption | MC sampling treats bars as independent; EWMA state-conditioning partially addresses volatility clustering | Regime conditioning is the primary mitigation |
 | Thin assets | Bunds (8 trades), EuroStoxx (48) — too few OOS events for reliable inference | Flagged in cross-asset table; primary results use Nasdaq |
 
----
-
-## Adding a New Asset
-
-1. Create `data/<AssetName>/` and drop in contract CSVs (format: `ExcelDate,Hour,Min,O,H,L,C,Volume`)
-2. Optionally add an `AIAgent<AssetName>.csv` for a real signal (otherwise a synthetic momentum signal is used)
-3. Add the tick size to `Config.tick_override` in `order_execution.py`
-4. Re-run the notebook — `AssetRegistry` auto-discovers the new folder
 
 ---
 
-## Notebook Structure (`order_execution_v4_2.ipynb`)
+## Notebook Structure (`order_execution_v8.ipynb`)
 
 | Cell | Content |
 |---|---|
